@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>s.abariiii — AI Chat (Proxy)</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#000;--card:#0b0b0b;--text:#fff;--muted:#a9a9a9;--accent:#fff;--bubble-dark:#1c1c1c}
+  *{box-sizing:border-box}html,body{height:100%}body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;background:var(--bg);color:var(--text)}
+  .app{min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:28px 16px}
+  .brand{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  .logo{width:46px;height:46px;border-radius:10px;background:var(--accent);color:#000;display:grid;place-items:center;font-weight:800}
+  .title{font-weight:700}
+  .chat-wrap{width:100%;max-width:860px;height:72vh;background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));border-radius:12px;border:1px solid rgba(255,255,255,0.03);display:flex;flex-direction:column;overflow:hidden}
+  .messages{flex:1;padding:18px;overflow:auto;display:flex;flex-direction:column;gap:12px}
+  .msg{max-width:78%;padding:12px 14px;border-radius:12px;line-height:1.4}
+  .user{align-self:flex-end;background:linear-gradient(180deg,#fff,#f2f2f2);color:#000;border-bottom-right-radius:4px}
+  .assistant{align-self:flex-start;background:linear-gradient(180deg,var(--bubble-dark),#111);color:var(--text);border-bottom-left-radius:4px}
+  .meta{font-size:12px;color:var(--muted);margin-top:6px}
+  .input-bar{display:flex;gap:10px;padding:12px;border-top:1px solid rgba(255,255,255,0.03);align-items:center}
+  .input{flex:1;background:transparent;border:1px solid rgba(255,255,255,0.04);padding:10px 12px;border-radius:10px;color:var(--text)}
+  .btn{background:var(--accent);color:#000;border:0;padding:10px 12px;border-radius:10px;cursor:pointer;font-weight:700}
+  .ghost{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted)}
+  .small{font-size:13px;color:var(--muted)}
+  .loader{display:inline-block;vertical-align:middle}
+  .dots span{display:inline-block;width:6px;height:6px;margin:0 3px;background:#fff;border-radius:50%;opacity:0;animation:dots 1s infinite linear}
+  .dots span:nth-child(1){animation-delay:0s}.dots span:nth-child(2){animation-delay:.15s}.dots span:nth-child(3){animation-delay:.3s}
+  @keyframes dots{0%{opacity:0;transform:translateY(0)}50%{opacity:1;transform:translateY(-6px)}100%{opacity:0;transform:translateY(0)}}
+  @media (max-width:640px){.chat-wrap{height:78vh}.messages{padding:12px}}
+</style>
+</head>
+<body>
+  <div class="app">
+    <div class="brand">
+      <div class="logo">S</div>
+      <div>
+        <div class="title">Harry AI</div>
+        <div class="small">Secure proxy mode (recommended)</div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;width:100%;max-width:860px">
+      <div style="flex:1" class="small">Proxy: <span id="proxy-url-display" style="color:var(--muted)">(not configured)</span></div>
+      <button id="clear-chat" class="ghost">Clear</button>
+      <button id="copy-chat" class="ghost">Export</button>
+    </div>
+
+    <div class="chat-wrap" role="region" aria-label="Chat">
+      <div class="messages" id="messages"></div>
+      <div class="input-bar">
+        <input id="prompt" class="input" placeholder="Ask anything... (Enter to send)" />
+        <button id="send" class="btn">Send</button>
+      </div>
+    </div>
+
+    <div style="margin-top:12px;text-align:center;color:var(--muted);font-size:13px">Use the Netlify proxy to keep your OpenAI key secret. See instructions below.</div>
+  </div>
+
+<script>
+// ===== CONFIG - set PROXY_URL to your deployed function URL =====
+const PROXY_URL = ''; // <-- Paste Netlify function URL here, e.g. https://your-site.netlify.app/.netlify/functions/chat
+const MODEL = 'gpt-4o-mini';
+
+// UI refs
+const messagesEl = document.getElementById('messages');
+const promptEl = document.getElementById('prompt');
+const sendBtn = document.getElementById('send');
+const proxyDisplay = document.getElementById('proxy-url-display');
+
+proxyDisplay.textContent = PROXY_URL || '(not configured)';
+
+// chat state
+let history = JSON.parse(localStorage.getItem('s_abariiii_chat_history') || '[]');
+let isSending = false;
+
+function renderHistory(){
+  messagesEl.innerHTML = '';
+  history.forEach(m=>{
+    const div = document.createElement('div');
+    div.className = 'msg ' + (m.role==='user' ? 'user' : 'assistant');
+    div.innerHTML = `<div>${escapeHtml(m.content)}</div>` + (m.meta ? `<div class="meta">${escapeHtml(m.meta)}</div>` : '');
+    messagesEl.appendChild(div);
+  });
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+function escapeHtml(text){ return text.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;') }
+
+renderHistory();
+
+function appendAssistantTyping(){
+  const d = document.createElement('div'); d.className='msg assistant'; d.id='typing';
+  d.innerHTML = `<div class="loader"><span class="dots"><span></span><span></span><span></span></span></div>`;
+  messagesEl.appendChild(d); messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+function removeAssistantTyping(){ const el = document.getElementById('typing'); if(el) el.remove(); }
+
+async function sendMessage(){
+  const text = promptEl.value.trim(); if(!text || isSending) return;
+  isSending = true; promptEl.value = '';
+  // push user msg
+  history.push({role:'user',content:text,meta:new Date().toLocaleString()});
+  localStorage.setItem('s_abariiii_chat_history', JSON.stringify(history));
+  renderHistory();
+  appendAssistantTyping();
+
+  try{
+    if(!PROXY_URL) throw new Error('PROXY_URL not configured');
+
+    const resp = await fetch(PROXY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: text, model: MODEL })
+    });
+
+    if(!resp.ok){
+      const txt = await resp.text();
+      throw new Error('Proxy error: ' + resp.status + ' ' + txt);
+    }
+    const j = await resp.json();
+    if(j.error) throw new Error(j.error);
+    const reply = j.reply || j.choices?.[0]?.message?.content || (j.data && JSON.stringify(j.data)) || '';
+    removeAssistantTyping();
+    history.push({role:'assistant',content:reply,meta:'assistant • ' + new Date().toLocaleString()});
+    localStorage.setItem('s_abariiii_chat_history', JSON.stringify(history));
+    renderHistory();
+  }catch(err){
+    removeAssistantTyping();
+    history.push({role:'assistant',content:'Error: ' + (err.message||err), meta:'error'});
+    localStorage.setItem('s_abariiii_chat_history', JSON.stringify(history));
+    renderHistory();
+    console.error(err);
+  } finally {
+    isSending = false;
+  }
+}
+
+sendBtn.addEventListener('click', sendMessage);
+promptEl.addEventListener('keydown', (e)=>{ if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); } });
+
+document.getElementById('clear-chat').addEventListener('click', ()=>{ if(confirm('Clear chat?')){ history=[]; localStorage.removeItem('s_abariiii_chat_history'); renderHistory(); }});
+document.getElementById('copy-chat').addEventListener('click', ()=>{ const txt = history.map(m=>`${m.role.toUpperCase()}: ${m.content}`).join('\\n\\n'); navigator.clipboard.writeText(txt).then(()=>alert('Copied!')) });
+
+</script>
+
+</body>
+</html>
